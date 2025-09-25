@@ -109,123 +109,119 @@ usethis::use_package("grid")
 #' dev.off()
 #' #' # end example
 KMplot.onlytwogrp <- function(dat,
-                              trt = "trt",                              # treatments/arms variable
-                              tte, ttecen, group,                       # TTE, censor, and the groups for comparison
-                              strat = NA,
-                              ttime.inc=4,                              # TTE break interval
-                              switch.leg=TRUE,                          # for switching legends of KMs
+                              trt = "trt",                               # treatments/arms variable
+                              tte, ttecen, group,                        # TTE, censor, and the groups for comparison
+                              strat = NA,                                # strat/covariate
+                              ttime.inc=4,                               # TTE break interval
+                              switch.leg=FALSE,                          # for switching legends of KMs
                               censor.status=FALSE,
-                              legend.type=1,
                               level.grp=c("Abema+EDT", "EDT"),
                               legend.lb=c('Abema+EDT', 'EDT'),
-                              legend.title.h="Legend head",
+                              yname="",
                               cols=c('red', 'blue', 'orange', 'green'),
-                              legend.pos = c(0, 0),
-                              legend.adj = c(-0.1, -0.3),
-                              expand.val = c(0, 0),
+                              legend.pos = c(0.80, 1),
                               legend.title=11, legend.text=10,
                               axis.title=11, axis.text=10,
-                              yname="",
-                              margin.plot=c(1, 1, 1, 1),
-                              margin.tb=c(1, 1, 1, 1),
-                              xlim.lo = 0,
-                              xminlab=-2,                               # length of risk table legend
-                              xmaxlab = -1,                             # space between risk table legend and table
-                              heights.plot = c(1.7, 0.75),
+                              tb.axis.text.y=9,
+                              tb.fontsize=2.6,
+                              legend.tb.size=2.8,
+                              heights.plot = c(2.3, 0.8),
                               n.round=2, p.round=3,
-                              n.space=list(c(14,5,7,15,5,7))) {
+                              x.pos = 0.11, y.pos = 0.38) {              # x/y position to add legend table
 
-  names(dat)[match(trt, names(dat))] <- "trt"
-  names(dat)[match(tte, names(dat))] <- "time"
-  names(dat)[match(ttecen, names(dat))] <- "ttecen"
-  names(dat)[match(group, names(dat))] <- "group"
+  # rename some variables for matching model call
+  dat.use <- dplyr::rename(dat,
+                           trt=all_of(trt), time=all_of(tte), ttecen=all_of(ttecen), group=all_of(group)) %>%
+    dplyr::mutate(grp=factor(group, levels = level.grp),
+                  evnt = 1 - ttecen)
 
-  dat.use <- mutate(dat,
-                    GRP = factor(group, levels = level.grp),
-                    time = time,
-                    trt = trt,
-                    evnt = 1 - ttecen)
-
-  if(switch.leg) {
+  if(switch.leg) {  # just for switching the legends displaying
     dat.lv <- mutate(dat.use,
-                     GRP=factor(group, levels = level.grp))
+                     grp=factor(group, levels = rev(level.grp)))
   } else {
     dat.lv <- dat.use
   }
-  fit.plot <- survfit(Surv(time, evnt) ~ GRP, data = dat.lv, conf.type = 'log-log')
+  fit.plot <- survfit(Surv(time, evnt) ~ grp, data = dat.lv, conf.type = 'log-log')
   x <- data.frame(summary(fit.plot)$table)
   meds <- quantile(fit.plot)
 
-  if (is.na(strat)){
-    hr1 <- coxph(Surv(time, evnt) ~ trt, data = dat.use, ties = 'exact')
+  if (all(strat %in% NA)) {
+    hr1 <- coxph(Surv(time, evnt) ~ grp, data = dat.use, ties = 'exact')
   } else {
-    form1 <- paste0('Surv(time, evnt) ~ trt + ', strat)
+    form1 <- paste0('Surv(time, evnt) ~ grp + ', paste(paste0("strata(", strat, ")"), collapse = " + "))
+    #form1 <- paste0('Surv(time, evnt) ~ grp + ', paste(strat,collapse = " + "))
     hr1 <- coxph(as.formula(form1), data = dat.use, ties = 'exact')
   }
-  hr <- format_num(summary(hr1)$conf.int[1], n.round)
-  ci <- paste0('(', format_num(summary(hr1)$conf.int[3], n.round), ', ', format_num(summary(hr1)$conf.int[4], n.round), ')')
+  hr <- ut_round(summary(hr1)$conf.int[1], n.round)
+  ci <- paste0('(', ut_round(summary(hr1)$conf.int[3], n.round), ', ', ut_round(summary(hr1)$conf.int[4], n.round), ')')
 
-  # get Log−rank p-value
+  # get Log-rank p-value
   p.val <- ifelse(summary(hr1)[["coefficients"]][,"Pr(>|z|)"] < 0.0001, "<.0001",
                   round(summary(hr1)[["coefficients"]][,"Pr(>|z|)"], p.round))
 
-  legend.lb.txt <- tte.legend.form(x=x, subgrpComp=list(level.grp),
-                                   hr=hr, ci=ci, pval=p.val,
-                                   legend.type=legend.type,
-                                   n.space = n.space)
+  # generate legend
+  legend.lb.txt <- data.frame(Treatment=level.grp,
+                              N=x[,"records"],
+                              Event=x[,"events"],
+                              Median=paste0(ut_round(x[,"median"], n.round), " (",
+                                            ut_round(meds$lower[,2], n.round), ", ",
+                                            ut_round(meds$upper[,2], n.round), ")"),
+                              HR=c(paste(hr, ci), ""),
+                              pval=c(p.val, ""))
+  names(legend.lb.txt) <- c("Treatment", "N", "Event", "Median (95% CI)", "HR (95% CI)", "P-value")
+
+  #--- plot
+  xlim.max <- max(seq(0, (max(dat.use$time)+ttime.inc), ttime.inc))  # set xlim max
 
   p <- ggsurvplot(fit.plot, data = dat.use,
                   size = 1,
                   censor=censor.status, censor.shape = "|", censor.size = 4,
                   palette = cols, conf.int = F,
-                  #linetype = ltypes,
-                  risk.table = TRUE, fontsize = 4, tables.theme = clean_theme(),
                   xlab = "Time (months)", ylab = yname,
                   surv.scale = "percent",
                   break.time.by = ttime.inc, break.y.by = 0.1,
-                  xlim=c(xlim.lo, (max(dat$time)+ttime.inc)),
-                  risk.table.y.text =FALSE,
-                  legend.title = legend.title.h,
-                  legend.labs = legend.lb.txt)
+                  xlim=c(0, xlim.max),
+                  ggtheme = theme_classic() +
+                    theme(legend.key.width=unit(1.2, "cm"),
+                          legend.title = element_text(size = legend.title),
+                          axis.title.y=element_text(size = axis.title, margin=margin(0,10,0,0)),
+                          axis.title.x=element_text(size = axis.title),
+                          axis.text.x =element_text(size = axis.text),
+                          axis.text.y =element_text(size = axis.text, vjust=0.5, hjust=0.5),
+                          axis.ticks=element_blank(),
+                          panel.grid.minor = element_blank(),
+                          panel.grid.major = element_blank(),
+                          plot.margin = unit(c(1.5, 0.5, 0, 0), "cm")),
+
+                  risk.table = TRUE,
+                  #risk.table.y.text = FALSE,
+                  risk.table.title = "# At Risk",
+                  fontsize=tb.fontsize,  # font size of table
+                  tables.theme = theme_survminer() +
+                    theme(plot.title = element_text(hjust = 0.02, size = 10),
+                          axis.text.y=element_text(size = tb.axis.text.y),
+                          axis.title.y=element_blank(),
+                          axis.text.x=element_blank(),
+                          axis.title.x=element_blank(),
+                          panel.background = element_rect(fill = "transparent", color = NA),
+                          plot.background = element_rect(fill = "transparent", color = NA),
+                          panel.grid.major = element_blank(),
+                          panel.grid.minor = element_blank(),
+                          axis.line = element_blank(),
+                          axis.ticks = element_blank(),
+                          plot.margin = unit(c(0, 0.5, 0.5, 0), "cm")),
+                  legend.labs = level.grp,
+                  legend=legend.pos,
+                  legend.title = "")
 
   p$plot <- p$plot +
-    scale_x_continuous(breaks = seq(0, (max(dat.use$time)+ttime.inc), ttime.inc), expand = expand.val) +
-    scale_y_continuous(breaks=seq(0, 10, 0.1), limits = c(0, 1),
-                       labels = scales::percent_format(accuracy=5L)) +
-    geom_hline(yintercept = .5, color = 'grey28', linetype = 'dashed') +
-    theme(legend.position = legend.pos,
-          legend.justification = legend.adj,
-          legend.key.width=unit(1.2, "cm"),
-          legend.title = element_text(size = legend.title, face = "bold"),
-          legend.text = element_text(size = legend.text, face = "bold"),
-          axis.title.y=element_text(size = axis.title, face = "bold"),
-          axis.title.x=element_text(size = axis.title, face = "bold"),
-          axis.text.x =element_text(size = axis.text, face = "bold"),
-          axis.text.y =element_text(size = axis.text, vjust=0.5, hjust=0.5, face = "bold"),
-          axis.ticks=element_blank(),
-          panel.grid.minor = element_blank(),
-          panel.grid.major = element_blank(),
-          text=element_text(size = axis.title, face = "bold"),
-          plot.margin = unit(margin.plot, "cm"))
+    scale_x_continuous(breaks = seq(0, (max(dat.use$time)+ttime.inc), ttime.inc)) +
+    scale_y_continuous(breaks=seq(0, 10, 0.1), limits = c(0, 1))
 
+  p.out <- plot_grid(p$plot, p$table, ncol = 1, rel_heights = heights.plot, align = "v", axis = "lr") +
+    annotate(geom = "table", x = x.pos, y = y.pos, label = list(legend.lb.txt),
+             vjust = 1, hjust = 0, alpha = .2, size = legend.tb.size, fill="white")
 
-  # update risk table
-  p$table <- p$table +
-    ggtitle("Patients at risk") +
-    theme(plot.title = element_text(hjust = 0.05, size = 11),
-          plot.margin = unit(margin.tb, "cm"),
-          axis.text.y=element_blank(),
-          axis.title.y=element_blank())
-
-  for(i in 1:length(legend.lb)) {
-    p$table <- p$table +
-      annotate("segment",
-               x = xminlab, xend = xmaxlab, y = i, yend = i,
-               colour = rev(cols)[i], linewidth = 1) +
-      coord_cartesian(clip = "off")
-  }
-
-  p.out <- ggarrange(p$plot, p$table, heights = heights.plot, ncol = 1, nrow = 2)
 
   return(p.out)
 }#end
